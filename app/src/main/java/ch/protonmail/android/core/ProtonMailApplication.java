@@ -197,13 +197,13 @@ public class ProtonMailApplication extends Application implements HasActivityInj
         if (BuildConfig.DEBUG) {
             Timber.plant(new Timber.DebugTree());
         } else {
-            Sentry.init(
-                    String.format(
-                            getString(R.string.sentry_url),
-                            BuildConfig.SENTRY_DNS_1,
-                            BuildConfig.SENTRY_DNS_2
-                    ), new AndroidSentryClientFactory(this));
-            Timber.plant(new SentryTree());
+//            Sentry.init(
+//                    String.format(
+//                            getString(R.string.sentry_url),
+//                            BuildConfig.SENTRY_DNS_1,
+//                            BuildConfig.SENTRY_DNS_2
+//                    ), new AndroidSentryClientFactory(this));
+//            Timber.plant(new SentryTree());
         }
 
         // Try to upgrade TLS Provider if needed
