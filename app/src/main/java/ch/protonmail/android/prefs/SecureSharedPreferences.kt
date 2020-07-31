@@ -36,6 +36,8 @@ import java.math.BigInteger
 import java.security.*
 import java.util.*
 import javax.crypto.Cipher
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 import javax.security.auth.x500.X500Principal
 
@@ -54,10 +56,14 @@ class SecureSharedPreferences
  */
 private constructor(var context: Context, private val delegate: SharedPreferences) : SharedPreferences {
 
+    private val keyPair: KeyPair
     private val keyStoreName = "AndroidKeyStore"
     private val asymmetricKeyAlias = "ProtonMailKey"
+    private val saltKeyAlias = "ProtonMailSalt"
 
     private var keyStore: KeyStore
+    private val secureRandom = SecureRandom()
+    private var symmetricSalt32Bytes = ByteArray(32)
 
     private val SEKRIT:MutableList<CharArray> by lazy {
         var keyPair = retrieveAsymmetricKeyPair(asymmetricKeyAlias)
@@ -92,7 +98,53 @@ private constructor(var context: Context, private val delegate: SharedPreference
         keyStore = KeyStore.getInstance(keyStoreName)
         keyStore.load(null)
 
+        val keyPairOptional = retrieveAsymmetricKeyPair(asymmetricKeyAlias)
+        keyPair = keyPairOptional?:generateKeyPair(context, asymmetricKeyAlias)
 
+        initSymmetricSalt()
+
+    }
+    private fun initSymmetricSalt() {
+        val byte16_0 = ByteArray(16)
+        val byte16_1 = ByteArray(16)
+
+        val preference = PreferenceManager.getDefaultSharedPreferences(context)
+
+
+        val rsaDecCipherDecrypt = Cipher.getInstance("RSA/ECB/PKCS1Padding").apply {
+            init(Cipher.DECRYPT_MODE, keyPair.private)
+        }
+
+        if (preference.contains(saltKeyAlias)) {
+            val salt = preference.getString(saltKeyAlias, "")
+            val saltBytes = Base64.decode(salt, Base64.NO_PADDING)
+
+            symmetricSalt32Bytes = rsaDecCipherDecrypt.doFinal(saltBytes)
+            if(symmetricSalt32Bytes.size == 32) {
+                return
+            }
+        }
+        preference.edit().remove(saltKeyAlias).apply()
+
+        secureRandom.nextBytes(byte16_0)
+        secureRandom.nextBytes(byte16_1)
+
+        val rsaEncCipher = Cipher.getInstance("RSA/ECB/PKCS1Padding").apply {
+            init(Cipher.ENCRYPT_MODE, keyPair.public)
+        }
+
+        symmetricSalt32Bytes = byte16_0.plus(byte16_1)
+
+        val saltEncoded = Base64.encodeToString(rsaEncCipher.doFinal(symmetricSalt32Bytes), Base64.NO_PADDING)
+        preference.edit().putString(saltKeyAlias, saltEncoded).apply()
+
+    }
+
+    private fun digestPassCode(passcode: String): ByteArray {
+        val secretKeyFactory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1")
+        val spec = PBEKeySpec(passcode.toCharArray(), symmetricSalt32Bytes, 40000, 256)
+        val secret = secretKeyFactory.generateSecret(spec)
+        return secret.encoded
     }
 
     private fun migrateToKeyStore(newSEKRIT: CharArray) {
