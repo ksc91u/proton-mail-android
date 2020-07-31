@@ -65,25 +65,27 @@ private constructor(var context: Context, private val delegate: SharedPreference
     private val secureRandom = SecureRandom()
     private var symmetricSalt32Bytes = ByteArray(32)
 
+    private val defaultSharedPreferences: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
+
     private val SEKRIT:MutableList<CharArray> by lazy {
         var keyPair = retrieveAsymmetricKeyPair(asymmetricKeyAlias)
         if (keyPair == null) {
             keyPair = generateKeyPair(context, asymmetricKeyAlias)
         }
 
-        var symmetricKey = decryptAsymmetric(PreferenceManager.getDefaultSharedPreferences(context).getString(PREF_SYMMETRIC_KEY, "")!!, keyPair.private)
+        var symmetricKey = decryptAsymmetric(defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, "")!!, keyPair.private)
 
         when (symmetricKey) {
             null -> { // error decrypting, we lost the key
                 symmetricKey = UUID.randomUUID().toString()
-                PreferenceManager.getDefaultSharedPreferences(context).edit().putString(PREF_SYMMETRIC_KEY, encryptAsymmetric(symmetricKey, keyPair.public)).apply()
+                defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY, encryptAsymmetric(symmetricKey, keyPair.public)).apply()
                 AppUtil.deletePrefs() // force re-login
                 // don't call ProtonMailApplication#notifyLoggedOut because UserManager is needed for that
                 // and it can't be properly instantiated because of this error here
             }
             "" -> { // no previous key stored
                 symmetricKey = UUID.randomUUID().toString()
-                PreferenceManager.getDefaultSharedPreferences(context).edit().putString(PREF_SYMMETRIC_KEY, encryptAsymmetric(symmetricKey, keyPair.public)).apply()
+                defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY, encryptAsymmetric(symmetricKey, keyPair.public)).apply()
                 migrateToKeyStore(symmetricKey.toCharArray())
             }
 
@@ -108,15 +110,13 @@ private constructor(var context: Context, private val delegate: SharedPreference
         val byte16_0 = ByteArray(16)
         val byte16_1 = ByteArray(16)
 
-        val preference = PreferenceManager.getDefaultSharedPreferences(context)
-
 
         val rsaDecCipherDecrypt = Cipher.getInstance("RSA/ECB/PKCS1Padding").apply {
             init(Cipher.DECRYPT_MODE, keyPair.private)
         }
 
-        if (preference.contains(saltKeyAlias)) {
-            val salt = preference.getString(saltKeyAlias, "")
+        if (defaultSharedPreferences.contains(saltKeyAlias)) {
+            val salt = defaultSharedPreferences.getString(saltKeyAlias, "")
             val saltBytes = Base64.decode(salt, Base64.NO_PADDING)
 
             symmetricSalt32Bytes = rsaDecCipherDecrypt.doFinal(saltBytes)
@@ -124,7 +124,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
                 return
             }
         }
-        preference.edit().remove(saltKeyAlias).apply()
+        defaultSharedPreferences.edit().remove(saltKeyAlias).apply()
 
         secureRandom.nextBytes(byte16_0)
         secureRandom.nextBytes(byte16_1)
@@ -136,7 +136,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
         symmetricSalt32Bytes = byte16_0.plus(byte16_1)
 
         val saltEncoded = Base64.encodeToString(rsaEncCipher.doFinal(symmetricSalt32Bytes), Base64.NO_PADDING)
-        preference.edit().putString(saltKeyAlias, saltEncoded).apply()
+        defaultSharedPreferences.edit().putString(saltKeyAlias, saltEncoded).apply()
 
     }
 
