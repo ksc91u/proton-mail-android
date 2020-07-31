@@ -67,7 +67,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
 
     private val defaultSharedPreferences: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
 
-    private val SEKRIT:MutableList<CharArray> by lazy {
+    private val SEKRIT:MutableList<ByteArray> by lazy {
         var keyPair = retrieveAsymmetricKeyPair(asymmetricKeyAlias)
         if (keyPair == null) {
             keyPair = generateKeyPair(context, asymmetricKeyAlias)
@@ -86,14 +86,14 @@ private constructor(var context: Context, private val delegate: SharedPreference
             "" -> { // no previous key stored
                 symmetricKey = UUID.randomUUID().toString()
                 defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY, encryptAsymmetric(symmetricKey, keyPair.public)).apply()
-                migrateToKeyStore(symmetricKey.toCharArray())
+                migrateToKeyStore(symmetricKey.toByteArray())
             }
 
             // else successfuly decrypted secret key
         }
 
 
-        return@lazy mutableListOf(symmetricKey!!.toCharArray())
+        return@lazy mutableListOf(symmetricKey!!.toByteArray())
     }
 
     init {
@@ -147,7 +147,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
         return secret.encoded
     }
 
-    private fun migrateToKeyStore(newSEKRIT: CharArray) {
+    private fun migrateToKeyStore(newSEKRIT: ByteArray) {
 
         // old code for getting encryption key
         var secretKey: String? =
@@ -159,10 +159,10 @@ private constructor(var context: Context, private val delegate: SharedPreference
                 delegate.edit().putString("AUIDSP", secretKey).apply()
             }
             SEKRIT.removeAt(0)
-            SEKRIT.add(secretKey!!.toCharArray())
+            SEKRIT.add(secretKey!!.toByteArray())
         } else {
             SEKRIT.removeAt(0)
-            SEKRIT.add(secretKey!!.toCharArray())
+            SEKRIT.add(secretKey!!.toByteArray())
         }
 
         val oldPreferences = mutableMapOf<String, String>()
@@ -333,7 +333,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
             //return out;
             val bytes = value?.toByteArray(charset(UTF8)) ?: ByteArray(0)
             val digester = MessageDigest.getInstance("SHA-256")
-            digester.update(String(SEKRIT.first()).toByteArray(charset("UTF-8")))
+            digester.update(SEKRIT.first())
             val key = digester.digest()
             val spec = SecretKeySpec(key, "AES")
             val pbeCipher = Cipher.getInstance(ALGORITHM_AES)
@@ -350,7 +350,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
             // return out;
             val bytes = if (value != null) Base64.decode(value, Base64.NO_WRAP) else ByteArray(0)
             val digester = MessageDigest.getInstance("SHA-256")
-            digester.update(String(SEKRIT.first()).toByteArray(charset("UTF-8")))
+            digester.update(SEKRIT.first())
             val key = digester.digest()
             val spec = SecretKeySpec(key, "AES")
             val pbeCipher = Cipher.getInstance(ALGORITHM_AES)
