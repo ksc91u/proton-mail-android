@@ -37,6 +37,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import ch.protonmail.android.BuildConfig;
 import ch.protonmail.android.R;
 import ch.protonmail.android.api.models.address.Address;
 import ch.protonmail.android.api.utils.Fields;
@@ -473,7 +474,7 @@ public class User {
     }
 
     public boolean isPaidUser() {
-        return subscribed > 0;
+        return subscribed > 0 || BuildConfig.DEBUG;
     }
 
     public boolean getDelinquent() {
