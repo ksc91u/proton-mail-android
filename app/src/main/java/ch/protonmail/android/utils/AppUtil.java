@@ -73,6 +73,7 @@ import static ch.protonmail.android.api.segments.BaseApiKt.RESPONSE_CODE_INVALID
 import static ch.protonmail.android.core.ProtonMailApplication.getApplication;
 import static ch.protonmail.android.core.UserManagerKt.PREF_PIN;
 import static ch.protonmail.android.prefs.SecureSharedPreferencesKt.PREF_SYMMETRIC_KEY;
+import static ch.protonmail.android.prefs.SecureSharedPreferencesKt.saltKeyAlias;
 import static ch.protonmail.android.servers.notification.NotificationServerKt.NOTIFICATION_ID_SENDING_FAILED;
 
 public class AppUtil {
@@ -374,7 +375,9 @@ public class AppUtil {
         SharedPreferences defaultSharedPrefs = ProtonMailApplication.getApplication().getDefaultSharedPreferences();
 
         String sekrit = defaultSharedPrefs.getString(PREF_SYMMETRIC_KEY, null);
+        String salt = defaultSharedPrefs.getString(saltKeyAlias, "");
         defaultSharedPrefs.edit().clear().apply();
+        defaultSharedPrefs.edit().putString(saltKeyAlias, salt).apply();
         defaultSharedPrefs.edit().putString(PREF_SYMMETRIC_KEY, sekrit).apply();
     }
 

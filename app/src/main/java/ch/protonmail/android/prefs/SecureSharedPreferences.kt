@@ -30,6 +30,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.text.TextUtils
 import android.util.Base64
+import ch.protonmail.android.BuildConfig
 import ch.protonmail.android.utils.AppUtil
 import ch.protonmail.android.utils.Logger
 import timber.log.Timber
@@ -46,6 +47,8 @@ import javax.security.auth.x500.X500Principal
 private const val UTF8 = "UTF-8"
 private const val ALGORITHM_AES = "AES"
 const val PREF_SYMMETRIC_KEY = "SEKRIT"
+const val saltKeyAlias = "ProtonMailSalt"
+
 // endregion
 
 class SecureSharedPreferences
@@ -60,7 +63,6 @@ private constructor(var context: Context, private val delegate: SharedPreference
     private val keyPair: KeyPair
     private val keyStoreName = "AndroidKeyStore"
     private val asymmetricKeyAlias = "ProtonMailKey"
-    private val saltKeyAlias = "ProtonMailSalt"
     private val customPassPhraseKey = "customPassPhraseKey"
 
     private val defaultPassPhrase = "ProtonMail"
@@ -92,6 +94,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
     private val SEKRIT: MutableList<ByteArray> by lazy {
         var keyPair = retrieveAsymmetricKeyPair(asymmetricKeyAlias)
         if (keyPair == null) {
+            Timber.d("Generate New RSA key")
             keyPair = generateKeyPair(context, asymmetricKeyAlias)
         }
 
@@ -133,12 +136,12 @@ private constructor(var context: Context, private val delegate: SharedPreference
 
         val keyPairOptional = retrieveAsymmetricKeyPair(asymmetricKeyAlias)
         keyPair = keyPairOptional ?: generateKeyPair(context, asymmetricKeyAlias)
+        initSymmetricSalt()
         versionMigrate()
     }
 
     private fun versionMigrate() {
         if (preferenceVersion < 1) {
-            initSymmetricSalt()
             migrateSEKRITDefaultPassPhrase()
             preferenceVersion = 1
             Timber.d("Migrate: Encrypt SEKRIT key with PassPhrase " + verifyPassPhraseCorrect(defaultPassPhrase))
@@ -161,7 +164,8 @@ private constructor(var context: Context, private val delegate: SharedPreference
         }
         defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY,
                 encryptWithPassPhraseString(encryptAsymmetric(String(SEKRIT[0]), keyPair.public), defaultPassPhrase)
-        ).apply()
+        ).commit()
+        Timber.d("Encode with default passphrase done")
         isCustomPassPhraseSet = false
     }
 
@@ -208,11 +212,13 @@ private constructor(var context: Context, private val delegate: SharedPreference
             val saltBytes = Base64.decode(salt, Base64.NO_PADDING)
 
             symmetricSalt32Bytes = rsaDecCipherDecrypt.doFinal(saltBytes)
+            Timber.d("Read salt length ${symmetricSalt32Bytes.size}")
             if (symmetricSalt32Bytes.size == 32) {
                 return
+            } else {
+                defaultSharedPreferences.edit().remove(saltKeyAlias).commit()
             }
         }
-        defaultSharedPreferences.edit().remove(saltKeyAlias).apply()
 
         secureRandom.nextBytes(byte32)
 
@@ -223,7 +229,8 @@ private constructor(var context: Context, private val delegate: SharedPreference
         symmetricSalt32Bytes = byte32
 
         val saltEncoded = Base64.encodeToString(rsaEncCipher.doFinal(symmetricSalt32Bytes), Base64.NO_PADDING)
-        defaultSharedPreferences.edit().putString(saltKeyAlias, saltEncoded).apply()
+        defaultSharedPreferences.edit().putString(saltKeyAlias, saltEncoded).commit()
+        Timber.d("Salt $saltEncoded")
 
     }
 
