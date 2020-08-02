@@ -32,6 +32,7 @@ import android.text.TextUtils
 import android.util.Base64
 import ch.protonmail.android.utils.AppUtil
 import ch.protonmail.android.utils.Logger
+import timber.log.Timber
 import java.math.BigInteger
 import java.security.*
 import java.util.*
@@ -60,7 +61,10 @@ private constructor(var context: Context, private val delegate: SharedPreference
     private val keyStoreName = "AndroidKeyStore"
     private val asymmetricKeyAlias = "ProtonMailKey"
     private val saltKeyAlias = "ProtonMailSalt"
-    private val KeyProtectedKey = "KeyProtectedKey"
+    private val customPassPhraseKey = "customPassPhraseKey"
+
+    private val defaultPassPhrase = "ProtonMail"
+    private val preferenceVersionKey = "PreferenceVersion"
 
     private var keyStore: KeyStore
     private val secureRandom = SecureRandom()
@@ -68,13 +72,22 @@ private constructor(var context: Context, private val delegate: SharedPreference
 
     private val defaultSharedPreferences: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
 
-    private var isPassPhraseProtected: Boolean = defaultSharedPreferences.getBoolean(KeyProtectedKey, false)
+    private var isCustomPassPhraseSet: Boolean = defaultSharedPreferences.getBoolean(customPassPhraseKey, false)
         get() =
-            defaultSharedPreferences.getBoolean(KeyProtectedKey, false)
+            defaultSharedPreferences.getBoolean(customPassPhraseKey, false)
         set(value) {
             field = value
-            defaultSharedPreferences.edit().putBoolean(KeyProtectedKey, value).commit()
+            defaultSharedPreferences.edit().putBoolean(customPassPhraseKey, value).commit()
         }
+
+    private var preferenceVersion: Long = defaultSharedPreferences.getLong(preferenceVersionKey, 0L)
+        get() = defaultSharedPreferences.getLong(preferenceVersionKey, 0L)
+        set(value) {
+            field = value
+            defaultSharedPreferences.edit().putLong(preferenceVersionKey, value).commit()
+        }
+
+    private var passPhrase: String = defaultPassPhrase
 
     private val SEKRIT: MutableList<ByteArray> by lazy {
         var keyPair = retrieveAsymmetricKeyPair(asymmetricKeyAlias)
@@ -82,21 +95,18 @@ private constructor(var context: Context, private val delegate: SharedPreference
             keyPair = generateKeyPair(context, asymmetricKeyAlias)
         }
 
-        var symmetricKey = if (isPassPhraseProtected) {
-            decryptAsymmetric(decryptWithPassPhraseString(
-                    defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, ""), "123456"),
-                    keyPair.private)
-        } else {
+        var symmetricKey = if (preferenceVersion >= 1) decryptAsymmetric(decryptWithPassPhraseString(
+                defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, ""), passPhrase),
+                keyPair.private) else
             decryptAsymmetric(defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, "")!!, keyPair.private)
-        }
 
         when (symmetricKey) {
             null -> { // error decrypting, we lost the key
                 symmetricKey = UUID.randomUUID().toString()
                 defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY,
-                        encryptWithPassPhraseString(encryptAsymmetric(symmetricKey, keyPair.public), "123456")
+                        encryptWithPassPhraseString(encryptAsymmetric(symmetricKey, keyPair.public), defaultPassPhrase)
                 ).apply()
-                isPassPhraseProtected = true
+                isCustomPassPhraseSet = false
                 AppUtil.deletePrefs() // force re-login
                 // don't call ProtonMailApplication#notifyLoggedOut because UserManager is needed for that
                 // and it can't be properly instantiated because of this error here
@@ -104,9 +114,9 @@ private constructor(var context: Context, private val delegate: SharedPreference
             "" -> { // no previous key stored
                 symmetricKey = UUID.randomUUID().toString()
                 defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY,
-                        encryptWithPassPhraseString(encryptAsymmetric(symmetricKey, keyPair.public), "123456")
+                        encryptWithPassPhraseString(encryptAsymmetric(symmetricKey, keyPair.public), defaultPassPhrase)
                 ).apply()
-                isPassPhraseProtected = true
+                isCustomPassPhraseSet = false
                 migrateToKeyStore(symmetricKey.toByteArray())
             }
 
@@ -123,13 +133,16 @@ private constructor(var context: Context, private val delegate: SharedPreference
 
         val keyPairOptional = retrieveAsymmetricKeyPair(asymmetricKeyAlias)
         keyPair = keyPairOptional ?: generateKeyPair(context, asymmetricKeyAlias)
+        versionMigrate()
+    }
 
-        initSymmetricSalt()
-
-        migrateSEKRITPassPhrase("123456")
-
-        println(">>>> isCorrect " + verifyPassPhraseCorrect("223456"))
-
+    private fun versionMigrate() {
+        if (preferenceVersion < 1) {
+            initSymmetricSalt()
+            migrateSEKRITDefaultPassPhrase()
+            preferenceVersion = 1
+            Timber.d("Migrate: Encrypt SEKRIT key with PassPhrase " + verifyPassPhraseCorrect(defaultPassPhrase))
+        }
     }
 
     fun verifyPassPhraseCorrect(passPhrase: String): Boolean {
@@ -142,15 +155,14 @@ private constructor(var context: Context, private val delegate: SharedPreference
         return true
     }
 
-    fun migrateSEKRITPassPhrase(passPhrase: String) {
-        if (isPassPhraseProtected) {
+    private fun migrateSEKRITDefaultPassPhrase() {
+        if (isCustomPassPhraseSet) {
             return
         }
         defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY,
-                encryptWithPassPhraseString(encryptAsymmetric(String(SEKRIT[0]), keyPair.public), passPhrase)
+                encryptWithPassPhraseString(encryptAsymmetric(String(SEKRIT[0]), keyPair.public), defaultPassPhrase)
         ).apply()
-        println(">>>> migrate done")
-        isPassPhraseProtected = true
+        isCustomPassPhraseSet = false
     }
 
     fun encryptWithPassPhraseString(plainText: String, passPhrase: String): String {
