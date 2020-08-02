@@ -68,15 +68,12 @@ private constructor(var context: Context, private val delegate: SharedPreference
 
     private val defaultSharedPreferences: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
 
-    private var isPassPhraseProtected: Boolean? = null
+    private var isPassPhraseProtected: Boolean = defaultSharedPreferences.getBoolean(KeyProtectedKey, false)
         get() =
             defaultSharedPreferences.getBoolean(KeyProtectedKey, false)
-
         set(value) {
             field = value
-            value?.let{
-                defaultSharedPreferences.edit().putBoolean(KeyProtectedKey, it).commit()
-            }
+            defaultSharedPreferences.edit().putBoolean(KeyProtectedKey, value).commit()
         }
 
     private val SEKRIT: MutableList<ByteArray> by lazy {
@@ -85,19 +82,31 @@ private constructor(var context: Context, private val delegate: SharedPreference
             keyPair = generateKeyPair(context, asymmetricKeyAlias)
         }
 
-        var symmetricKey = decryptAsymmetric(defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, "")!!, keyPair.private)
+        var symmetricKey = if (isPassPhraseProtected) {
+            decryptAsymmetric(decryptWithPassPhraseString(
+                    defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, ""), "123456"),
+                    keyPair.private)
+        } else {
+            decryptAsymmetric(defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, "")!!, keyPair.private)
+        }
 
         when (symmetricKey) {
             null -> { // error decrypting, we lost the key
                 symmetricKey = UUID.randomUUID().toString()
-                defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY, encryptAsymmetric(symmetricKey, keyPair.public)).apply()
+                defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY,
+                        encryptWithPassPhraseString(encryptAsymmetric(symmetricKey, keyPair.public), "123456")
+                ).apply()
+                isPassPhraseProtected = true
                 AppUtil.deletePrefs() // force re-login
                 // don't call ProtonMailApplication#notifyLoggedOut because UserManager is needed for that
                 // and it can't be properly instantiated because of this error here
             }
             "" -> { // no previous key stored
                 symmetricKey = UUID.randomUUID().toString()
-                defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY, encryptAsymmetric(symmetricKey, keyPair.public)).apply()
+                defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY,
+                        encryptWithPassPhraseString(encryptAsymmetric(symmetricKey, keyPair.public), "123456")
+                ).apply()
+                isPassPhraseProtected = true
                 migrateToKeyStore(symmetricKey.toByteArray())
             }
 
@@ -117,6 +126,61 @@ private constructor(var context: Context, private val delegate: SharedPreference
 
         initSymmetricSalt()
 
+        migrateSEKRITPassPhrase("123456")
+
+        println(">>>> isCorrect " + verifyPassPhraseCorrect("223456"))
+
+    }
+
+    fun verifyPassPhraseCorrect(passPhrase: String): Boolean {
+        try {
+            decryptWithPassPhraseString(
+                    defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, ""), passPhrase)
+        } catch (e: Exception) {
+            return false
+        }
+        return true
+    }
+
+    fun migrateSEKRITPassPhrase(passPhrase: String) {
+        if (isPassPhraseProtected) {
+            return
+        }
+        defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY,
+                encryptWithPassPhraseString(encryptAsymmetric(String(SEKRIT[0]), keyPair.public), passPhrase)
+        ).apply()
+        println(">>>> migrate done")
+        isPassPhraseProtected = true
+    }
+
+    fun encryptWithPassPhraseString(plainText: String, passPhrase: String): String {
+        val cipherBytes = encryptWithPassPhrase(plainText.toByteArray(), passPhrase)
+        return Base64.encodeToString(cipherBytes, Base64.NO_WRAP)
+    }
+
+    fun decryptWithPassPhraseString(cipherTextB64: String, passPhrase: String): String {
+        val cipherBytes = Base64.decode(cipherTextB64, Base64.NO_WRAP)
+        val plainBytes = decryptWithPassPhrase(cipherBytes, passPhrase)
+        return String(plainBytes)
+    }
+
+    fun encryptWithPassPhrase(plainBytes: ByteArray, passPhrase: String): ByteArray {
+
+        val passPhraseKey = digestPassPhrase(passPhrase)
+
+        val spec = SecretKeySpec(passPhraseKey, "AES")
+        val pbeCipher = Cipher.getInstance(ALGORITHM_AES)
+        pbeCipher.init(Cipher.ENCRYPT_MODE, spec)
+        return pbeCipher.doFinal(plainBytes)
+    }
+
+    fun decryptWithPassPhrase(cipherBytes: ByteArray, passPhrase: String): ByteArray {
+        val passPhraseKey = digestPassPhrase(passPhrase)
+
+        val spec = SecretKeySpec(passPhraseKey, "AES")
+        val pbeCipher = Cipher.getInstance(ALGORITHM_AES)
+        pbeCipher.init(Cipher.DECRYPT_MODE, spec)
+        return pbeCipher.doFinal(cipherBytes)
     }
 
     private fun initSymmetricSalt() {
@@ -151,9 +215,9 @@ private constructor(var context: Context, private val delegate: SharedPreference
 
     }
 
-    private fun digestPassCode(passcode: String): ByteArray {
+    private fun digestPassPhrase(passPhrase: String): ByteArray {
         val secretKeyFactory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1")
-        val spec = PBEKeySpec(passcode.toCharArray(), symmetricSalt32Bytes, 40000, 256)
+        val spec = PBEKeySpec(passPhrase.toCharArray(), symmetricSalt32Bytes, 40000, 256)
         val secret = secretKeyFactory.generateSecret(spec)
         return secret.encoded
     }
