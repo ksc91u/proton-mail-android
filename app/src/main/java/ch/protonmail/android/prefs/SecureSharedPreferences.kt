@@ -30,10 +30,10 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.text.TextUtils
 import android.util.Base64
-import ch.protonmail.android.BuildConfig
 import ch.protonmail.android.utils.AppUtil
 import ch.protonmail.android.utils.Logger
 import timber.log.Timber
+import java.lang.IllegalStateException
 import java.math.BigInteger
 import java.security.*
 import java.util.*
@@ -82,6 +82,12 @@ private constructor(var context: Context, private val delegate: SharedPreference
             defaultSharedPreferences.edit().putBoolean(customPassPhraseKey, value).commit()
         }
 
+    fun requirePassPhrase(): Boolean = isCustomPassPhraseSet
+
+
+    private var _initialized: Boolean = false
+    fun isInitialized(): Boolean = _initialized
+
     private var preferenceVersion: Long = defaultSharedPreferences.getLong(preferenceVersionKey, 0L)
         get() = defaultSharedPreferences.getLong(preferenceVersionKey, 0L)
         set(value) {
@@ -89,7 +95,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
             defaultSharedPreferences.edit().putLong(preferenceVersionKey, value).commit()
         }
 
-    private var passPhrase: String = defaultPassPhrase
+    private var prefPassPhrase: String = defaultPassPhrase
 
     private val SEKRIT: MutableList<ByteArray> by lazy {
         var keyPair = retrieveAsymmetricKeyPair(asymmetricKeyAlias)
@@ -99,15 +105,15 @@ private constructor(var context: Context, private val delegate: SharedPreference
         }
 
         var symmetricKey = if (preferenceVersion >= 1) decryptAsymmetric(decryptWithPassPhraseString(
-                defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, ""), passPhrase),
-                keyPair.private) else
+            defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, ""), prefPassPhrase),
+            keyPair.private) else
             decryptAsymmetric(defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, "")!!, keyPair.private)
 
         when (symmetricKey) {
             null -> { // error decrypting, we lost the key
                 symmetricKey = UUID.randomUUID().toString()
                 defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY,
-                        encryptWithPassPhraseString(encryptAsymmetric(symmetricKey, keyPair.public), defaultPassPhrase)
+                    encryptWithPassPhraseString(encryptAsymmetric(symmetricKey, keyPair.public), defaultPassPhrase)
                 ).apply()
                 isCustomPassPhraseSet = false
                 AppUtil.deletePrefs() // force re-login
@@ -117,7 +123,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
             "" -> { // no previous key stored
                 symmetricKey = UUID.randomUUID().toString()
                 defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY,
-                        encryptWithPassPhraseString(encryptAsymmetric(symmetricKey, keyPair.public), defaultPassPhrase)
+                    encryptWithPassPhraseString(encryptAsymmetric(symmetricKey, keyPair.public), defaultPassPhrase)
                 ).apply()
                 isCustomPassPhraseSet = false
                 migrateToKeyStore(symmetricKey.toByteArray())
@@ -138,6 +144,38 @@ private constructor(var context: Context, private val delegate: SharedPreference
         keyPair = keyPairOptional ?: generateKeyPair(context, asymmetricKeyAlias)
         initSymmetricSalt()
         versionMigrate()
+
+        changePassPhrase(defaultPassPhrase, "ProtonVPN")
+        changePassPhrase("ProtonVPN", defaultPassPhrase)
+        initWithPassPhrase("ProtonMail")
+    }
+
+    fun initWithPassPhrase(passPhrase: String): Boolean {
+        if (!requirePassPhrase() || isInitialized()) {
+            _initialized = true
+            return true
+        }
+
+        assert(verifyPassPhraseCorrect(passPhrase)) { "Should verify passphrase correct first" }
+
+        prefPassPhrase = passPhrase
+        _initialized = true
+
+        Timber.d("Initialize success, SEKRIT " + String(SEKRIT[0]))
+        return true
+    }
+
+    fun changePassPhrase(oldPass: String, newPass: String) {
+        if (verifyPassPhraseCorrect(oldPass).not()) {
+            throw IllegalStateException("Incorrect PassPhrase")
+        }
+        val oldCipher = defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, "")
+        val clearText = decryptWithPassPhraseString(oldCipher, oldPass)
+        val cipherText = encryptWithPassPhraseString(clearText, newPass)
+        defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY, cipherText).commit()
+        isCustomPassPhraseSet = true
+
+        Timber.d("Symmetric Key from $oldCipher to $clearText to $cipherText")
     }
 
     private fun versionMigrate() {
@@ -151,7 +189,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
     fun verifyPassPhraseCorrect(passPhrase: String): Boolean {
         try {
             decryptWithPassPhraseString(
-                    defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, ""), passPhrase)
+                defaultSharedPreferences.getString(PREF_SYMMETRIC_KEY, ""), passPhrase)
         } catch (e: Exception) {
             return false
         }
@@ -163,7 +201,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
             return
         }
         defaultSharedPreferences.edit().putString(PREF_SYMMETRIC_KEY,
-                encryptWithPassPhraseString(encryptAsymmetric(String(SEKRIT[0]), keyPair.public), defaultPassPhrase)
+            encryptWithPassPhraseString(encryptAsymmetric(String(SEKRIT[0]), keyPair.public), defaultPassPhrase)
         ).commit()
         Timber.d("Encode with default passphrase done")
         isCustomPassPhraseSet = false
@@ -245,7 +283,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
 
         // old code for getting encryption key
         var secretKey: String? =
-                Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+            Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
         if (TextUtils.isEmpty(secretKey)) {
             secretKey = delegate.getString("AUIDSP", null)
             if (TextUtils.isEmpty(secretKey)) {
@@ -473,21 +511,21 @@ private constructor(var context: Context, private val delegate: SharedPreference
         // to the KeyPairGenerator.
         val algorithmParameterSpec = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
             KeyPairGeneratorSpec.Builder(context)
-                    .setAlias(alias)
-                    .setSubject(X500Principal("CN=ProtonMail, O=Android Authority"))
-                    .setSerialNumber(BigInteger.ONE)
-                    .setStartDate(start.time)
-                    .setEndDate(end.time)
-                    .build()
+                .setAlias(alias)
+                .setSubject(X500Principal("CN=ProtonMail, O=Android Authority"))
+                .setSerialNumber(BigInteger.ONE)
+                .setStartDate(start.time)
+                .setEndDate(end.time)
+                .build()
         } else {
             KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                    .setCertificateSubject(X500Principal("CN=ProtonMail, O=Android Authority"))
-                    .setBlockModes(KeyProperties.BLOCK_MODE_ECB)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
-                    .setCertificateSerialNumber(BigInteger.ONE)
-                    .setCertificateNotBefore(start.time)
-                    .setCertificateNotAfter(end.time)
-                    .build()
+                .setCertificateSubject(X500Principal("CN=ProtonMail, O=Android Authority"))
+                .setBlockModes(KeyProperties.BLOCK_MODE_ECB)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
+                .setCertificateSerialNumber(BigInteger.ONE)
+                .setCertificateNotBefore(start.time)
+                .setCertificateNotAfter(end.time)
+                .build()
         }
 
         keyPairGenerator.initialize(algorithmParameterSpec)
@@ -552,7 +590,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
 
     inner class Editor internal constructor() : SharedPreferences.Editor {
         private var delegate: SharedPreferences.Editor =
-                this@SecureSharedPreferences.delegate.edit()
+            this@SecureSharedPreferences.delegate.edit()
 
         @Synchronized
         override fun putBoolean(key: String, value: Boolean): Editor {
@@ -613,14 +651,14 @@ private constructor(var context: Context, private val delegate: SharedPreference
     }
 
     fun buildLongSharedPrefsListener(watchForKey: String, onKeyUpdated: Function1<Long, Unit>) =
-            object : LongOnSharedPreferenceChangeListener(watchForKey) {
-                override fun onKeyUpdated(newValue: Long) {
-                    onKeyUpdated.invoke(newValue)
-                }
+        object : LongOnSharedPreferenceChangeListener(watchForKey) {
+            override fun onKeyUpdated(newValue: Long) {
+                onKeyUpdated.invoke(newValue)
             }
+        }
 
     abstract inner class LongOnSharedPreferenceChangeListener(private val mWatchForKey: String) :
-            SharedPreferences.OnSharedPreferenceChangeListener {
+        SharedPreferences.OnSharedPreferenceChangeListener {
         abstract fun onKeyUpdated(newValue: Long)
         override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String) {
             if (key == encryptProxyKey(mWatchForKey)) {
