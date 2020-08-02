@@ -107,8 +107,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
 
     }
     private fun initSymmetricSalt() {
-        val byte16_0 = ByteArray(16)
-        val byte16_1 = ByteArray(16)
+        val byte32 = ByteArray(32)
 
 
         val rsaDecCipherDecrypt = Cipher.getInstance("RSA/ECB/PKCS1Padding").apply {
@@ -126,14 +125,13 @@ private constructor(var context: Context, private val delegate: SharedPreference
         }
         defaultSharedPreferences.edit().remove(saltKeyAlias).apply()
 
-        secureRandom.nextBytes(byte16_0)
-        secureRandom.nextBytes(byte16_1)
+        secureRandom.nextBytes(byte32)
 
         val rsaEncCipher = Cipher.getInstance("RSA/ECB/PKCS1Padding").apply {
             init(Cipher.ENCRYPT_MODE, keyPair.public)
         }
 
-        symmetricSalt32Bytes = byte16_0.plus(byte16_1)
+        symmetricSalt32Bytes = byte32
 
         val saltEncoded = Base64.encodeToString(rsaEncCipher.doFinal(symmetricSalt32Bytes), Base64.NO_PADDING)
         defaultSharedPreferences.edit().putString(saltKeyAlias, saltEncoded).apply()
