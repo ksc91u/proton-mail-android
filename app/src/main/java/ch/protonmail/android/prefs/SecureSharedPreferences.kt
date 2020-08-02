@@ -60,6 +60,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
     private val keyStoreName = "AndroidKeyStore"
     private val asymmetricKeyAlias = "ProtonMailKey"
     private val saltKeyAlias = "ProtonMailSalt"
+    private val KeyProtectedKey = "KeyProtectedKey"
 
     private var keyStore: KeyStore
     private val secureRandom = SecureRandom()
@@ -67,7 +68,18 @@ private constructor(var context: Context, private val delegate: SharedPreference
 
     private val defaultSharedPreferences: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
 
-    private val SEKRIT:MutableList<ByteArray> by lazy {
+    private var isPassPhraseProtected: Boolean? = null
+        get() =
+            defaultSharedPreferences.getBoolean(KeyProtectedKey, false)
+
+        set(value) {
+            field = value
+            value?.let{
+                defaultSharedPreferences.edit().putBoolean(KeyProtectedKey, it).commit()
+            }
+        }
+
+    private val SEKRIT: MutableList<ByteArray> by lazy {
         var keyPair = retrieveAsymmetricKeyPair(asymmetricKeyAlias)
         if (keyPair == null) {
             keyPair = generateKeyPair(context, asymmetricKeyAlias)
@@ -101,11 +113,12 @@ private constructor(var context: Context, private val delegate: SharedPreference
         keyStore.load(null)
 
         val keyPairOptional = retrieveAsymmetricKeyPair(asymmetricKeyAlias)
-        keyPair = keyPairOptional?:generateKeyPair(context, asymmetricKeyAlias)
+        keyPair = keyPairOptional ?: generateKeyPair(context, asymmetricKeyAlias)
 
         initSymmetricSalt()
 
     }
+
     private fun initSymmetricSalt() {
         val byte32 = ByteArray(32)
 
@@ -119,7 +132,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
             val saltBytes = Base64.decode(salt, Base64.NO_PADDING)
 
             symmetricSalt32Bytes = rsaDecCipherDecrypt.doFinal(saltBytes)
-            if(symmetricSalt32Bytes.size == 32) {
+            if (symmetricSalt32Bytes.size == 32) {
                 return
             }
         }
@@ -360,7 +373,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
         }
     }
 
-    private fun generateKeyPair(context: Context, alias: String) : KeyPair {
+    private fun generateKeyPair(context: Context, alias: String): KeyPair {
 
         // workaround for BouncyCastle crashing when parsing Date in RTL languages
         // we set locale temporarily to US and then go back
@@ -456,7 +469,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
 
     inner class Editor internal constructor() : SharedPreferences.Editor {
         private var delegate: SharedPreferences.Editor =
-            this@SecureSharedPreferences.delegate.edit()
+                this@SecureSharedPreferences.delegate.edit()
 
         @Synchronized
         override fun putBoolean(key: String, value: Boolean): Editor {
@@ -517,14 +530,14 @@ private constructor(var context: Context, private val delegate: SharedPreference
     }
 
     fun buildLongSharedPrefsListener(watchForKey: String, onKeyUpdated: Function1<Long, Unit>) =
-        object : LongOnSharedPreferenceChangeListener(watchForKey) {
-            override fun onKeyUpdated(newValue: Long) {
-                onKeyUpdated.invoke(newValue)
+            object : LongOnSharedPreferenceChangeListener(watchForKey) {
+                override fun onKeyUpdated(newValue: Long) {
+                    onKeyUpdated.invoke(newValue)
+                }
             }
-        }
 
     abstract inner class LongOnSharedPreferenceChangeListener(private val mWatchForKey: String) :
-        SharedPreferences.OnSharedPreferenceChangeListener {
+            SharedPreferences.OnSharedPreferenceChangeListener {
         abstract fun onKeyUpdated(newValue: Long)
         override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String) {
             if (key == encryptProxyKey(mWatchForKey)) {
@@ -535,6 +548,7 @@ private constructor(var context: Context, private val delegate: SharedPreference
 
     companion object {
         private var decryptionErrorFlag = false
+
         @SuppressLint("StaticFieldLeak")
         private var prefs: SecureSharedPreferences? = null
         private val userSSPs = mutableMapOf<String, SecureSharedPreferences>()
